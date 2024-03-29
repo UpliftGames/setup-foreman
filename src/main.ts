@@ -1,27 +1,42 @@
-import * as core from "@actions/core";
-import * as tc from "@actions/tool-cache";
-import * as github from "@actions/github";
-import {exec} from "@actions/exec";
+import { getInput, debug, addPath, setFailed } from "@actions/core";
+import { downloadTool, extractZip } from "@actions/tool-cache";
+import { GitHub } from "@actions/github";
+import { resolve } from "path";
+import { exec } from "@actions/exec";
+
+import semver from "semver";
+import configFile from "./configFile";
 import foreman from "./foreman";
+
+const MIN_ARTIFACTORY_FOREMAN_VERSION = "v1.6.0";
 
 async function run(): Promise<void> {
   try {
-    const versionReq: string = core.getInput("version");
-    const githubToken: string = core.getInput("token");
+    const versionReq: string = getInput("version");
+    const githubToken: string = getInput("token");
+    const workingDir: string = getInput("working-directory");
+    const githubApiUrl: string = getInput("github-api-url");
+    const allowExternalGithubOrgs: string = getInput(
+      "allow-external-github-orgs"
+    ).toLowerCase();
+    const artifactoryUrl = getInput("artifactory-url");
+    const artifactoryToken = getInput("artifactory-token");
 
-    const octokit = new github.GitHub(githubToken);
+    const octokit = new GitHub(githubToken, {
+      baseUrl: githubApiUrl
+    });
     const releases = await foreman.getReleases(octokit);
+    const validReleases = foreman.filterValidReleases(releases);
+    debug("Choosing release from GitHub API");
 
-    core.debug("Choosing release from GitHub API");
-
-    const release = foreman.chooseRelease(versionReq, releases);
+    const release = foreman.chooseRelease(versionReq, validReleases);
     if (release == null) {
       throw new Error(
         `Could not find Foreman release for version ${versionReq}`
       );
     }
 
-    core.debug(`Chose release ${release.tag_name}`);
+    debug(`Chose release ${release.tag_name}`);
 
     const asset = foreman.chooseAsset(release);
     if (asset == null) {
@@ -30,21 +45,54 @@ async function run(): Promise<void> {
       );
     }
 
-    core.debug(`Chose release asset ${asset.browser_download_url}`);
+    debug(`Chose release asset ${asset.browser_download_url}`);
 
-    const zipPath = await tc.downloadTool(asset.browser_download_url);
-    const extractedPath = await tc.extractZip(zipPath, ".foreman-install");
-    core.addPath(extractedPath);
+    const zipPath = await downloadTool(asset.browser_download_url);
+    const extractedPath = await extractZip(zipPath, ".foreman-install");
+    addPath(resolve(extractedPath));
 
     if (process.platform === "darwin" || process.platform === "linux") {
       await exec("chmod +x .foreman-install/foreman");
     }
 
     await foreman.authenticate(githubToken);
-    await foreman.installTools();
+
+    if (artifactoryUrl != "" && artifactoryToken != "") { // both defined
+      if (semver.compare(release.tag_name, MIN_ARTIFACTORY_FOREMAN_VERSION) == -1) {
+        throw new Error(
+          `Artifactory support requires Foreman version ${MIN_ARTIFACTORY_FOREMAN_VERSION} or later`
+        );
+      }
+
+      await foreman.addArtifactoryToken(artifactoryUrl, artifactoryToken);
+    } else if (artifactoryUrl != "" || artifactoryToken != "") { // only one defined
+      throw new Error(
+        "Both artifactory-url and artifactory-token must be set or null"
+      );
+    }
+
     foreman.addBinDirToPath();
+
+    if (workingDir !== undefined && workingDir !== null && workingDir !== "") {
+      process.chdir(workingDir);
+    }
+
+    if (allowExternalGithubOrgs != "true") {
+      debug("Checking tools in Foreman Config come from source org");
+      const owner = process.env.GITHUB_REPOSITORY_OWNER;
+      if (owner == undefined) {
+        throw new Error(
+          `Could not find repository owner setup-foreman is running in`
+        );
+      }
+      configFile.checkSameOrgInConfig(owner.toLowerCase());
+    }
+
+    await foreman.installTools();
   } catch (error) {
-    core.setFailed(error.message);
+    if (error instanceof Error) {
+      setFailed(error.message);
+    }
   }
 }
 

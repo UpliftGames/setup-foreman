@@ -3,9 +3,26 @@ description: 'Install Foreman, a toolchain manager for Roblox projects'
 author: 'The Rojo Developers'
 inputs:
   version:
+    required: false
     description: 'SemVer version of Foreman to install'
+  working-directory:
+    required: false
+    description: 'Working directory to run `foreman install` in'
+  github-api-url:
+    required: false
+    description: 'GitHub API to make requests to'
   token:
+    required: true
     description: 'GitHub token from secrets.GITHUB_TOKEN'
+  allow-external-github-orgs:
+    required: false
+    description: 'Allow installing from external GitHub organizations'
+  artifactory-url:
+    required: false
+    description: 'Artifactory URL to use for downloading Foreman tools'
+  artifactory-token:
+    required: false
+    description: 'Artifactory token to use for downloading Foreman tools'
 runs:
-  using: 'node12'
+  using: 'node16'
   main: 'dist/index.js'
